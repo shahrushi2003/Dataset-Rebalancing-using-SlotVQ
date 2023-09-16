@@ -29,7 +29,7 @@ def get_data(data_args):
     data_prepper.prepare_data_loaders()
     return data_prepper
 
-def train_slot_model(model_args, data_prepper):
+def train_slot_model(model_args, data_prepper, run_name):
 	seed_everything(seed=model_args["seed"], workers=True)
 	model = Lightning_AE(model_args).to(device)
 	if model_args["use_kmeans"]:
@@ -42,8 +42,8 @@ def train_slot_model(model_args, data_prepper):
 
 	checkpoint_callback = ModelCheckpoint(monitor='total_val_loss', mode='min')
 
-	wandb_logger = WandbLogger(project='Autoencoder_Slot_Learner',
-							name=f'alpha{model_args["alpha"]}_beta{model_args["beta"]}_with_kmeans',
+	wandb_logger = WandbLogger(project='Slot_Rebalancing_Experiments',
+							name=run_name,
 							log_model='all')
 	# log gradients, parameter histogram and model topology
 	wandb_logger.watch(model, log="all")
@@ -116,7 +116,7 @@ def rebalance(model, data_prepper, model_args):
 
 
 
-def eval_using_classifier(data_prepper, rebalanced_data, classifier_args):
+def eval_using_classifier(data_prepper, rebalanced_data, classifier_args, run_name):
 	# Initialising models
 	seed_everything(seed=classifier_args["seed"], workers=True)
 	model_1 = Lightning_Classifier(classifier_args, data_type="Original").to(device)
@@ -124,11 +124,9 @@ def eval_using_classifier(data_prepper, rebalanced_data, classifier_args):
 	model_2.model = copy.deepcopy(model_1.model).to(device)
 
 
-	wandb_logger = WandbLogger(project='Autoencoder_Slot_Learner',
-							name=f'alpha{model_args["alpha"]}_beta{model_args["beta"]}_with_kmeans',
-							log_model='all')
-
-
+	wandb_logger = WandbLogger(project='Slot_Rebalancing_Experiments',
+				   name=run_name,
+				   log_model='all')
 
 	trainer = Trainer(profiler="simple",
 					deterministic=True,
@@ -168,8 +166,9 @@ if __name__ == "__main__":
 		return args
 
 	# args = get_args()
+	run_name = f'seed{model_args["seed"]}_alpha{model_args["alpha"]}_beta{model_args["beta"]}_with_kmeans'
 	data_prepper = get_data(data_args)
-	model = train_slot_model(model_args, data_prepper)
+	model = train_slot_model(model_args, data_prepper, run_name)
 	rebalanced_data = rebalance(model, data_prepper, model_args)
-	eval_using_classifier(data_prepper, rebalanced_data, classifier_args)
+	eval_using_classifier(data_prepper, rebalanced_data, classifier_args, run_name)
  
