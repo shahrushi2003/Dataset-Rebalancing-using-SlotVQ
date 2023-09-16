@@ -187,7 +187,7 @@ class Lightning_AE(lightning.LightningModule):
         for idx, (paths, target, code) in enumerate(self.training_step_outputs):
             target = target.to(self.device)
             coll.collect(code.cpu(), paths, target)
-
+        print()
         print("Slots Distribution for Epoch:", self.current_epoch)
         print([len(coll.slot_collector[i]) for i in coll.slot_collector])
 
