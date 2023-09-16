@@ -5,11 +5,11 @@ import lightning
 from slot_collector import Slot_Collector
 
 import os
-os.chdir("/content/vqtorch_folder")
-# Finally importing the module
+
+os.chdir("./vqtorch_folder")
 import vqtorch
 # Resetting the current working directory
-os.chdir("/content")
+os.chdir("..")
 
 from edecoder import Encoder, Decoder
 from slot_att import SlotAttention
