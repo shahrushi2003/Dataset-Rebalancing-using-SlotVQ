@@ -19,7 +19,7 @@ static_model_configs = {
     }
 hyp_model_configs = {
     "num_slots":3,
-    "seed":data_args["seed"],
+    "seed":42,
     "num_iterations":3,
     "batch_size":data_args["train_batch"],
     "hid_dim":32,
@@ -42,7 +42,7 @@ model_args = static_model_configs | hyp_model_configs
 
 static_classifier_configs = {
     "model_dir":'/content/',
-    "seed":data_args["seed"],
+    "seed":42,
     "num_workers":data_args["workers"],
     "num_classes":10,
     "resolution":model_args["resolution"]
