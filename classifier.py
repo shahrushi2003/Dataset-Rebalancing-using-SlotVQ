@@ -57,7 +57,6 @@ class Lightning_Classifier(lightning.LightningModule):
         elif self.opt["model_type"] == 'MLP':
           self.model = FinalClassifier(28*28*3, 10, 10)
         self.metric = Accuracy('multiclass', num_classes=opt["num_classes"])
-        self.save_hyperparameters()
 
     def forward(self, x):
         return self.model(x)
