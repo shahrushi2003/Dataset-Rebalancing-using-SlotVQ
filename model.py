@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from torch import linalg as LA
 import lightning
 from slot_collector import Slot_Collector
 
@@ -20,7 +21,7 @@ class SlotAttentionAutoEncoder(nn.Module):
     def __init__(self, resolution, num_slots,
                  num_iterations, hid_dim, codebook_size,
                  beta, use_kmeans, z_norm, cb_norm,
-                 affine_lr, sync_nu, replace_freq, device):
+                 affine_lr, sync_nu, replace_freq, lambda_l2_vq, device):
         """Builds the Slot Attention-based auto-encoder.
         Args:
         resolution: Tuple of integers specifying width and height of input image.
@@ -41,6 +42,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         self.affine_lr=affine_lr
         self.sync_nu=sync_nu
         self.replace_freq=replace_freq
+        self.lambda_l2_vq = lambda_l2_vq
         self.device = device
 
         self.encoder_cnn = Encoder(self.resolution, self.hid_dim).to(device)
@@ -102,7 +104,7 @@ class SlotAttentionAutoEncoder(nn.Module):
           # print("Before Quantization", slots[:, s, :].unsqueeze(1).shape)
           q_slot, vq_dict = self.vector_quantizers[s](slots[:, s, :].unsqueeze(1))
           # print("After Quantization", q_slot.shape)
-          curr_vq_loss = vq_dict["loss"]
+          curr_vq_loss = vq_dict["loss"] + (self.lambda_l2_vq * torch.mean(LA.norm(self.vector_quantizers[s].codebook.weight, ord = 2, dim=0)))
           vq_loss += curr_vq_loss
           codes = vq_dict["q"].reshape(-1, 1)
           e_mean = F.one_hot(vq_dict["q"], num_classes=self.codebook_size).view(-1, self.codebook_size).float().mean(0)
@@ -157,6 +159,7 @@ class Lightning_AE(lightning.LightningModule):
                                               affine_lr = opt["affine_lr"],
                                               sync_nu = opt["sync_nu"],
                                               replace_freq = opt["replace_freq"],
+                                              lambda_l2_vq = opt["lambda_l2_vq"],
                                               device = device).to(device)
 
         self.training_step_outputs = []

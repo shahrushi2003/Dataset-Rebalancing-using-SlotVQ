@@ -34,7 +34,8 @@ hyp_model_configs = {
     "learning_rate":3e-4,
     "num_epochs":20,
     "alpha":10,
-    "temperature": 1
+    "temperature": 1,
+    "lambda_l2_vq": 0.0,
     }
 
 model_args = static_model_configs | hyp_model_configs
