@@ -77,7 +77,7 @@ class SlotAttentionAutoEncoder(nn.Module):
     def warmup_quantizers(self):
         for vq_layer in self.vector_quantizers:
             with torch.no_grad():
-              z_e = torch.randn(64, 1, 32).to(self.device)
+              z_e = torch.randn(64, 1, self.hid_dim).to(self.device)
               output = vq_layer(z_e)
               del output
 
