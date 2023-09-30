@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch import linalg as LA
 import lightning
+from lightning.pytorch import seed_everything
 from slot_collector import Slot_Collector
 
 import os
@@ -143,6 +144,7 @@ class SlotAttentionAutoEncoder(nn.Module):
 class Lightning_AE(lightning.LightningModule):
     def __init__(self, opt):
         super().__init__()
+        seed_everything(seed=opt["seed"], workers=True)
         self.example_input_array = torch.Tensor(32, 3, 28, 28)
         self.opt = opt
         self.alpha = opt["alpha"]

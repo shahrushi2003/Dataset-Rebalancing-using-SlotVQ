@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torchmetrics import Accuracy
 import lightning
+from lightning.pytorch import seed_everything
 
 class FinalClassifier(nn.Module):
   def __init__(self, input_size, hid_num, output_size):
@@ -48,6 +49,7 @@ class Final_Conv_Classifier(nn.Module):
 class Lightning_Classifier(lightning.LightningModule):
     def __init__(self, opt, data_type):
         super().__init__()
+        seed_everything(seed=opt["seed"], workers=True)
         self.data_type = data_type
         self.example_input_array = torch.Tensor(32, 3, 28, 28)
         self.opt = opt
