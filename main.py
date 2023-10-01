@@ -15,6 +15,9 @@ from data_prep import Rebalanced_Dataset
 from torchvision import transforms
 import copy
 import argparse
+import os
+import cv2
+import matplotlib.pyplot as plt
 
 
 from data_prep import MnistTrain
@@ -58,6 +61,53 @@ def train_slot_model(model_args, data_prepper, run_name):
 	# wandb.finish()
 	return model
 
+def plot_images(slots):
+    output_folder = "./"
+    num_images_to_show = 20
+    slot_dict = {}
+    
+    for i in slots:
+        if len(slots[i]) != 0:
+            slot_dict[i] = slots[i]
+
+    fig, axs = plt.subplots(len(slot_dict), num_images_to_show+1, figsize=(num_images_to_show, len(slot_dict)))
+
+    # Set the aspect ratio to be equal for correct image display
+    for i in range(len(slot_dict)):
+        for j in range(num_images_to_show+1):
+            axs[i, j].axis('off')
+    c = 0
+
+    # Loop through each slot and its images
+    for slot, images in slot_dict.items():
+        # Print the slot number on the left side of the row
+        axs[c, 0].text(0, 0.5, f"Bin {slot}", fontsize=12, va='center', ha='center')
+        axs[c, 0].axis('off')
+
+        # Take up to num_images_to_show images for the slot
+        if len(images) > num_images_to_show:
+            images = random.sample(images, num_images_to_show)
+        
+        for i, image_info in enumerate(images):
+            if image_info is not None:
+                image_path, target = image_info
+                img = cv2.imread(image_path)  # Read the image using cv2
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert to RGB format
+                axs[c, i + 1].imshow(img)
+        
+        c += 1
+
+    # Save the plot as an image in the output folder
+    output_file_path = os.path.join(output_folder, "slot_visualization.png")
+    # plt.axis('off')
+    plt.savefig(output_file_path)
+
+    # Show the plot (optional)
+    plt.show()
+
+    # Close the plot to release resources (optional)
+    plt.close()
+
 
 def rebalance(model, data_prepper, model_args):
 	# disable randomness, dropout, etc...
@@ -70,11 +120,13 @@ def rebalance(model, data_prepper, model_args):
 	print("Slots Successfully Collected!")
 
 	slots = coll.slot_collector
+ 
+	plot_images(slots)
 
 	for i in coll.slot_collector:
 		print(len(coll.slot_collector[i]), end=" ")
-		
-		print("The total number of slots is", len(slots))
+	print()
+	print("The total number of slots is", len(slots))
 
 	probs = np.array([len(slots[i]) for i in slots])
 
