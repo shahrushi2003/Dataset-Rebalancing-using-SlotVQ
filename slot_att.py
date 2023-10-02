@@ -28,6 +28,12 @@ class SlotAttention(nn.Module):
         self.norm_input  = nn.LayerNorm(dim)
         self.norm_slots  = nn.LayerNorm(dim)
         self.norm_pre_ff = nn.LayerNorm(dim)
+        
+    def reparameterize(self, mu, sigma):
+        # Generate samples with the same batch size as mu and sigma
+        batch_size = mu.size(0)
+        epsilon = torch.randn(batch_size, *mu.size()[1:], device=mu.device, dtype=mu.dtype)
+        return mu + epsilon * sigma
 
     def forward(self, inputs, num_slots = None):
         b, n, d = inputs.shape
@@ -35,7 +41,8 @@ class SlotAttention(nn.Module):
 
         mu = self.slots_mu.expand(b, n_s, -1)
         sigma = self.slots_sigma.expand(b, n_s, -1)
-        slots = torch.normal(mu, sigma)
+        # slots = torch.normal(mu, sigma)
+        slots = self.reparameterize(mu, sigma)
 
         inputs = self.norm_input(inputs)
         k, v = self.to_k(inputs), self.to_v(inputs)
