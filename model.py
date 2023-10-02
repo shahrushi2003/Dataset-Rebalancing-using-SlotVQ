@@ -142,7 +142,7 @@ class SlotAttentionAutoEncoder(nn.Module):
     
     
 class Lightning_AE(lightning.LightningModule):
-    def __init__(self, opt):
+    def __init__(self, opt, train_loader):
         super().__init__()
         seed_everything(seed=opt["seed"], workers=True)
         self.example_input_array = torch.Tensor(32, 3, 28, 28)
@@ -163,8 +163,7 @@ class Lightning_AE(lightning.LightningModule):
                                               replace_freq = opt["replace_freq"],
                                               lambda_l2_vq = opt["lambda_l2_vq"],
                                               device = device).to(device)
-
-        self.training_step_outputs = []
+        self.t_loader = train_loader
         self.save_hyperparameters()
 
     def forward(self, x):
@@ -183,20 +182,15 @@ class Lightning_AE(lightning.LightningModule):
         self.log("engagement_0", perplexity[0], batch_size=self.opt['batch_size'])
         self.log("engagement_1", perplexity[1], batch_size=self.opt['batch_size'])
         self.log("engagement_2", perplexity[2], batch_size=self.opt['batch_size'])
-        self.training_step_outputs.append((paths, labels, codes))
         del slots, masks
         return loss
 
     def on_train_epoch_end(self):
-        coll = Slot_Collector(num_slots = self.opt["num_slots"], codebook_size = self.opt["codebook_size"])
-        for idx, (paths, target, code) in enumerate(self.training_step_outputs):
-            target = target.to(self.device)
-            coll.collect(code.cpu(), paths, target)
-        print()
-        print("Slots Distribution for Epoch:", self.current_epoch)
+        self.model.eval()
+        coll = Slot_Collector(self.opt["num_slots"], self.opt["codebook_size"])
+        coll.get_slots(self.t_loader, self)
+        print("\nSlots Distribution for Epoch:", self.current_epoch)
         print([len(coll.slot_collector[i]) for i in coll.slot_collector])
-
-        self.training_step_outputs.clear()  # free memory
 
     def validation_step(self, batch, batch_idx):
         images, _, labels = batch
