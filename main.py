@@ -34,7 +34,7 @@ def get_data(data_args):
 
 def train_slot_model(model_args, data_prepper, run_name):
 	seed_everything(seed=model_args["seed"], workers=True)
-	model = Lightning_AE(model_args).to(device)
+	model = Lightning_AE(model_args, data_prepper.train_loader).to(device)
 	if model_args["use_kmeans"]:
 		model.model.warmup_quantizers()
 	summary = ModelSummary(model, max_depth=-1)
