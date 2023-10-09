@@ -60,20 +60,19 @@ class SlotAttentionAutoEncoder(nn.Module):
             hidden_dim = 128)
 
         self.vector_quantizers = []
-        for i in range(self.num_slots):
-            self.vector_quantizers.append((vqtorch.nn.VectorQuant(feature_size=self.hid_dim,     # feature dimension corresponding to the vectors
-                                                                  num_codes=self.codebook_size,         # number of codebook vectors
-                                                                  beta=self.beta,            # (default: 0.9) commitment trade-off
-                                                                  kmeans_init=self.use_kmeans,    # (default: False) whether to use kmeans++ init
-                                                                  norm=self.z_norm,           # (default: None) normalization for the input vectors
-                                                                  cb_norm=self.cb_norm,        # (default: None) normalization for codebook vectors
-                                                                  affine_lr=self.affine_lr,      # (default: 0.0) lr scale for affine parameters
-                                                                  sync_nu=self.sync_nu,         # (default: 0.0) codebook synchronization contribution
-                                                                  replace_freq=self.replace_freq,     # (default: None) frequency to replace dead codes
-                                                                  dim=-1,              # (default: -1) dimension to be quantized
-                                                                  )).to(self.device))
+        self.vector_quantizer = (vqtorch.nn.VectorQuant(feature_size=self.hid_dim,     # feature dimension corresponding to the vectors
+                                                                num_codes=self.codebook_size,         # number of codebook vectors
+                                                                beta=self.beta,            # (default: 0.9) commitment trade-off
+                                                                kmeans_init=self.use_kmeans,    # (default: False) whether to use kmeans++ init
+                                                                norm=self.z_norm,           # (default: None) normalization for the input vectors
+                                                                cb_norm=self.cb_norm,        # (default: None) normalization for codebook vectors
+                                                                affine_lr=self.affine_lr,      # (default: 0.0) lr scale for affine parameters
+                                                                sync_nu=self.sync_nu,         # (default: 0.0) codebook synchronization contribution
+                                                                replace_freq=self.replace_freq,     # (default: None) frequency to replace dead codes
+                                                                dim=-1,              # (default: -1) dimension to be quantized
+                                                                )).to(self.device)
             
-        self.vector_quantizers = nn.ModuleList(self.vector_quantizers)
+        # self.vector_quantizers = nn.ModuleList(self.vector_quantizers)
 
     def warmup_quantizers(self):
         for vq_layer in self.vector_quantizers:
@@ -103,9 +102,9 @@ class SlotAttentionAutoEncoder(nn.Module):
         final_codes = []
         for s in range(self.num_slots):
           # print("Before Quantization", slots[:, s, :].unsqueeze(1).shape)
-          q_slot, vq_dict = self.vector_quantizers[s](slots[:, s, :].unsqueeze(1))
+          q_slot, vq_dict = self.vector_quantizer(slots[:, s, :].unsqueeze(1))
           # print("After Quantization", q_slot.shape)
-          curr_vq_loss = vq_dict["loss"] + (self.lambda_l2_vq * torch.mean(LA.norm(self.vector_quantizers[s].codebook.weight, ord = 2, dim=0)))
+          curr_vq_loss = vq_dict["loss"] + (self.lambda_l2_vq * torch.mean(LA.norm(self.vector_quantizer.codebook.weight, ord = 2, dim=0)))
           vq_loss += curr_vq_loss
           codes = vq_dict["q"].reshape(-1, 1)
           e_mean = F.one_hot(vq_dict["q"], num_classes=self.codebook_size).view(-1, self.codebook_size).float().mean(0)
@@ -190,7 +189,10 @@ class Lightning_AE(lightning.LightningModule):
         coll = Slot_Collector(self.opt["num_slots"], self.opt["codebook_size"])
         coll.get_slots(self.t_loader, self)
         print("\nSlots Distribution for Epoch:", self.current_epoch)
-        print([len(coll.slot_collector[i]) for i in coll.slot_collector])
+        # print([len(coll.slot_collector[i]) for i in coll.slot_collector])
+        for i in coll.slot_collector:
+            if len(coll.slot_collector[i]) > 0:
+                print(len(coll.slot_collector[i]), end=" ")
 
     def validation_step(self, batch, batch_idx):
         images, _, labels = batch
