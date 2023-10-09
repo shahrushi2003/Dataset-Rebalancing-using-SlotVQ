@@ -8,7 +8,7 @@ class Slot_Collector():
         super().__init__()
         self.num_slots = num_slots
         self.codebook_size = codebook_size
-        self.mult_array = torch.tensor([self.num_slots**i for i in range(self.codebook_size)][::-1]).reshape(-1, 1)
+        self.mult_array = torch.tensor([self.codebook_size**i for i in range(self.num_slots)][::-1]).reshape(-1, 1)
         self.codebooks = []
         self.slot_collector = {}
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -17,8 +17,8 @@ class Slot_Collector():
 
     def collect(self, final_codes, image_paths, targets):
         slot_indices = torch.matmul(final_codes, self.mult_array).reshape(-1).tolist()
-        for i in slot_indices:
-            self.slot_collector[i].append((image_paths[i], targets[i]))
+        for i in range(len(slot_indices)):
+            self.slot_collector[slot_indices[i]].append((image_paths[i], targets[i]))
     
     def get_slots(self, loader, model):
         model.to(self.device)
@@ -35,5 +35,3 @@ def apply_temp(temp, probs):
     denom = np.sum(np.power(probs, 1/temp))
     new_probs = (np.power(probs, 1/temp))/denom
     return new_probs
-            
-    
