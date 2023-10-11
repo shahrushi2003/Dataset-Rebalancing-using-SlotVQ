@@ -1,233 +1,232 @@
-import torch.nn as nn
+from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.utilities.model_summary import ModelSummary
+from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.callbacks import ModelCheckpoint
+from torch.utils.data import DataLoader
+import wandb
 import torch
-import torch.nn.functional as F
-from torch import linalg as LA
-import lightning
-from lightning.pytorch import seed_everything
-from slot_collector import Slot_Collector
-
+from tqdm.auto import tqdm
+import numpy as np
+from random import choices
+from collections import Counter
+import random
+import pandas as pd
+from data_prep import Rebalanced_Dataset
+from torchvision import transforms
+import copy
+import argparse
 import os
+import cv2
+import matplotlib.pyplot as plt
 
-os.chdir("./vqtorch_folder")
-import vqtorch
-# Resetting the current working directory
-os.chdir("..")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-from edecoder import Encoder, Decoder
-from slot_att import SlotAttention
+from data_prep import MnistTrain
+from model import Lightning_AE
+from slot_collector import Slot_Collector, apply_temp
+from classifier import Lightning_Classifier
+from configs import model_args, data_args, classifier_args
+
+def get_data(data_args):
+	seed_everything(seed=data_args["seed"], workers=True)
+	data_prepper = MnistTrain(args = data_args)
+	data_prepper.prepare_data_loaders()
+	return data_prepper
+
+def train_slot_model(model_args, data_prepper, run_name):
+	seed_everything(seed=model_args["seed"], workers=True)
+	model = Lightning_AE(model_args, data_prepper.train_loader).to(device)
+	if model_args["use_kmeans"]:
+		model.model.warmup_quantizers()
+	summary = ModelSummary(model, max_depth=-1)
+	print("Model Summary:")
+	print(summary)
+	print("Configs")
+	print(model_args)
+
+	# model.model.eval()
+	# coll = Slot_Collector(model_args["num_slots"], model_args["codebook_size"])
+	# coll.get_slots(data_prepper.train_loader, model)
+	# # print("\nSlots Distribution for Epoch:", self.current_epoch)
+	# print([len(coll.slot_collector[i]) for i in coll.slot_collector])
+
+	checkpoint_callback = ModelCheckpoint(monitor='total_val_loss', mode='min')
+
+	wandb_logger = WandbLogger(project='Slot_Rebalancing_Experiments',
+							name=run_name,
+							log_model='all')
+	# log gradients, parameter histogram and model topology
+	wandb_logger.watch(model, log="all")
+
+	trainer = Trainer(accelerator="gpu",
+					logger=wandb_logger,
+					max_epochs=model_args["num_epochs"],
+					callbacks=[checkpoint_callback],
+					)
+
+	trainer.fit(model, train_dataloaders=data_prepper.train_loader, val_dataloaders=data_prepper.val_loader)
+	# wandb.finish()
+	return model
+
+def plot_images(slots):
+	output_folder = "./"
+	num_images_to_show = 20
+	slot_dict = {}
+
+	for i in slots:
+		if len(slots[i]) != 0:
+			slot_dict[i] = slots[i]
+
+	fig, axs = plt.subplots(len(slot_dict), num_images_to_show+1, figsize=(num_images_to_show, len(slot_dict)))
+
+	# Set the aspect ratio to be equal for correct image display
+	for i in range(len(slot_dict)):
+		for j in range(num_images_to_show+1):
+			axs[i, j].axis('off')
+	c = 0
+
+	# Loop through each slot and its images
+	for slot, images in slot_dict.items():
+		# Print the slot number on the left side of the row
+		axs[c, 0].text(0, 0.5, f"Bin {slot}", fontsize=12, va='center', ha='center')
+		axs[c, 0].axis('off')
+
+		# Take up to num_images_to_show images for the slot
+		if len(images) > num_images_to_show:
+			images = random.sample(images, num_images_to_show)
+
+		for i, image_info in enumerate(images):
+			if image_info is not None:
+				image_path, target = image_info
+				img = cv2.imread(image_path)  # Read the image using cv2
+				img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert to RGB format
+				axs[c, i + 1].imshow(img)
+
+		c += 1
+
+	# Save the plot as an image in the output folder
+	output_file_path = os.path.join(output_folder, "slot_visualization.png")
+	# plt.axis('off')
+	plt.savefig(output_file_path)
+
+	# Show the plot (optional)
+	plt.show()
+
+	# Close the plot to release resources (optional)
+	plt.close()
 
 
-"""Slot Attention-based auto-encoder for object discovery."""
-class SlotAttentionAutoEncoder(nn.Module):
-    def __init__(self, resolution, num_slots,
-                 num_iterations, hid_dim, codebook_size,
-                 beta, use_kmeans, z_norm, cb_norm,
-                 affine_lr, sync_nu, replace_freq, lambda_l2_vq, device):
-        """Builds the Slot Attention-based auto-encoder.
-        Args:
-        resolution: Tuple of integers specifying width and height of input image.
-        num_slots: Number of slots in Slot Attention.
-        num_iterations: Number of iterations in Slot Attention.
-        """
-        super().__init__()
-        self.resolution = resolution
-        self.num_slots = num_slots
-        self.num_iterations = num_iterations
-        self.hid_dim = hid_dim
-        self.codebook_size = codebook_size
-        self.beta = beta
-        self.use_kmeans = use_kmeans
-        self.hid_dim
-        self.z_norm=z_norm
-        self.cb_norm=cb_norm
-        self.affine_lr=affine_lr
-        self.sync_nu=sync_nu
-        self.replace_freq=replace_freq
-        self.lambda_l2_vq = lambda_l2_vq
-        self.device = device
+def rebalance(model, data_prepper, model_args):
+	# disable randomness, dropout, etc...
+	seed_everything(seed=model_args["seed"], workers=True)
+	model.eval()
 
-        self.encoder_cnn = Encoder(self.resolution, self.hid_dim).to(device)
-        self.decoder_cnn = Decoder(self.hid_dim, self.resolution).to(device)
+	coll = Slot_Collector(model_args["num_slots"], model_args["codebook_size"])
+	coll.get_slots(data_prepper.train_loader, model)
 
-        self.fc1 = nn.Linear(hid_dim, hid_dim)
-        self.fc2 = nn.Linear(hid_dim, hid_dim)
+	print("Slots Successfully Collected!")
 
-        self.slot_attention = SlotAttention(
-            num_slots=self.num_slots,
-            dim=self.hid_dim,
-            iters = self.num_iterations,
-            eps = 1e-8,
-            hidden_dim = 128)
+	slots = coll.slot_collector
 
-        self.vector_quantizers = []
-        self.vector_quantizer = (vqtorch.nn.VectorQuant(feature_size=self.hid_dim,     # feature dimension corresponding to the vectors
-                                                                num_codes=self.codebook_size,         # number of codebook vectors
-                                                                beta=self.beta,            # (default: 0.9) commitment trade-off
-                                                                kmeans_init=self.use_kmeans,    # (default: False) whether to use kmeans++ init
-                                                                norm=self.z_norm,           # (default: None) normalization for the input vectors
-                                                                cb_norm=self.cb_norm,        # (default: None) normalization for codebook vectors
-                                                                affine_lr=self.affine_lr,      # (default: 0.0) lr scale for affine parameters
-                                                                sync_nu=self.sync_nu,         # (default: 0.0) codebook synchronization contribution
-                                                                replace_freq=self.replace_freq,     # (default: None) frequency to replace dead codes
-                                                                dim=-1,              # (default: -1) dimension to be quantized
-                                                                )).to(self.device)
-            
-        # self.vector_quantizers = nn.ModuleList(self.vector_quantizers)
+	plot_images(slots)
 
-    def warmup_quantizers(self):
-        for vq_layer in self.vector_quantizers:
-            with torch.no_grad():
-              z_e = torch.randn(self.opt["batch_size"], 1, self.hid_dim).to(self.device)
-              output = vq_layer(z_e)
-              del output
+	for i in coll.slot_collector:
+		print(len(coll.slot_collector[i]), end=" ")
+	print()
+	print("The total number of slots is", len(slots))
 
-    def forward(self, image):
-        # `image` has shape: [batch_size, num_channels, width, height].
+	probs = np.array([len(slots[i]) for i in slots])
 
-        # Convolutional encoder with position embedding.
-        x = self.encoder_cnn(image)  # CNN Backbone.
-        x = nn.LayerNorm(x.shape[1:]).to(self.device)(x)
-        x = self.fc1(x)
-        x = F.relu(x)
-        x = self.fc2(x)  # Feedforward network on set.
-        # `x` has shape: [batch_size, width*height, input_size].
+	# Without temperature
+	new_probs = apply_temp(model_args["temperature"], probs)
 
-        # Slot Attention module.
-        slots = self.slot_attention(x)
-        # `slots` has shape: [batch_size, num_slots, slot_size].
+	# Sanity Check 1
+	print("Sanity Check 1", np.sum(apply_temp(1, probs)) == 1)
 
-        quantized_slots = []
-        vq_loss = 0
-        all_perplexity = []
-        final_codes = []
-        for s in range(self.num_slots):
-          # print("Before Quantization", slots[:, s, :].unsqueeze(1).shape)
-          q_slot, vq_dict = self.vector_quantizer(slots[:, s, :].unsqueeze(1))
-          # print("After Quantization", q_slot.shape)
-          curr_vq_loss = vq_dict["loss"] + (self.lambda_l2_vq * torch.mean(LA.norm(self.vector_quantizer.codebook.weight, ord = 2, dim=0)))
-          vq_loss += curr_vq_loss
-          codes = vq_dict["q"].reshape(-1, 1)
-          e_mean = F.one_hot(vq_dict["q"], num_classes=self.codebook_size).view(-1, self.codebook_size).float().mean(0)
-          perplexity = torch.exp(-torch.sum(e_mean * torch.log(e_mean + 1e-10)))
-          final_codes.append(codes)
-          all_perplexity.append(perplexity.item())
-          # engagement.append(torch.sum(torch.flatten(vq_dict["q"])).item())
-          quantized_slots.append(q_slot)
+	population = list(range(len(probs)))
+	weights = np.array(new_probs)
 
-        slots = torch.cat(quantized_slots, dim=1)
-        final_codes = torch.cat(final_codes, dim=1)
-        # print("After Concatination", quantized_slots.shape)
+	samples = choices(population, weights, k=len(data_prepper.train_dataset))
 
-        # """Broadcast slot features to a 2D grid and collapse slot dimension.""".
-        slots = slots.reshape((-1, slots.shape[-1])).unsqueeze(1).unsqueeze(2)
-        slots = slots.repeat((1, 8, 8, 1))
+	for i in dict(Counter(samples)):
+		print(dict(Counter(samples))[i], new_probs[i]*len(data_prepper.train_dataset), probs[i])
 
-        # `slots` has shape: [batch_size*num_slots, width_init, height_init, slot_size].
-        x = self.decoder_cnn(slots)
-        # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
+	new_imgs = []
+	new_labels = []
+	counts = dict(Counter(samples))
+	for i in counts:
+		num_samples = counts[i]
+		curr_samples = random.choices(slots[i], k=num_samples)
+		new_imgs += [path for path, label in curr_samples]
+		new_labels += [label.item() for path, label in curr_samples]
 
-        # Undo combination of slot and batch dimension; split alpha masks.
-        recons, masks = x.reshape(image.shape[0], -1, x.shape[1], x.shape[2], x.shape[3]).split([3,1], dim=-1)
-        # `recons` has shape: [batch_size, num_slots, width, height, num_channels].
-        # `masks` has shape: [batch_size, num_slots, width, height, 1].
 
-        # Normalize alpha masks over slots.
-        masks = nn.Softmax(dim=1)(masks)
-        recon_combined = torch.sum(recons * masks, dim=1)  # Recombine image.
-        recon_combined = recon_combined.permute(0,3,1,2)
-        # `recon_combined` has shape: [batch_size, width, height, num_channels].
 
-        return recon_combined, recons, masks, slots, vq_loss, all_perplexity, final_codes
-    
-    
-class Lightning_AE(lightning.LightningModule):
-    def __init__(self, opt, train_loader):
-        super().__init__()
-        seed_everything(seed=opt["seed"], workers=True)
-        self.example_input_array = torch.Tensor(32, 3, 28, 28)
-        self.opt = opt
-        self.alpha = opt["alpha"]
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model = SlotAttentionAutoEncoder(resolution = opt["resolution"],
-                                              num_slots = opt["num_slots"],
-                                              num_iterations = opt["num_iterations"],
-                                              hid_dim = opt["hid_dim"],
-                                              codebook_size = opt["codebook_size"],
-                                              beta = opt["beta"],
-                                              use_kmeans = opt["use_kmeans"],
-                                              z_norm = opt["z_norm"],
-                                              cb_norm = opt["cb_norm"],
-                                              affine_lr = opt["affine_lr"],
-                                              sync_nu = opt["sync_nu"],
-                                              replace_freq = opt["replace_freq"],
-                                              lambda_l2_vq = opt["lambda_l2_vq"],
-                                              device = device).to(device)
-        self.t_loader = train_loader
-        self.save_hyperparameters()
+	df = pd.DataFrame(list(zip(new_imgs, new_labels)),
+					columns =['Path', 'Label'])
+	df.to_csv(f'balanced_data_beta{model_args["beta"]}.csv')
+	print(df.head(100))
 
-    def forward(self, x):
-        recon_combined, recons, masks, slots, vq_loss, perplexity, codes = self.model(x)
-        return recon_combined
+	# Sanity Check 2
+	print("Sanity Check 2", len(df)==len(data_prepper.train_dataset))
 
-    def training_step(self, batch, batch_idx):
-        images, paths, labels = batch
-        recon_combined, recons, masks, slots, vq_loss, perplexity, codes = self.model(images)
-        recon_loss = nn.functional.mse_loss(recon_combined, images)
-        loss = self.alpha*recon_loss + vq_loss
-        self.log("recon_train_loss", recon_loss, batch_size=self.opt['batch_size'])
-        self.log("vq_train_loss", vq_loss, batch_size=self.opt['batch_size'])
-        self.log("total_train_loss", loss, batch_size=self.opt['batch_size'])
-        # self.log("perplexity", perplexity, batch_size=self.opt['batch_size'])
-        self.log("engagement_0", perplexity[0], batch_size=self.opt['batch_size'])
-        self.log("engagement_1", perplexity[1], batch_size=self.opt['batch_size'])
-        self.log("engagement_2", perplexity[2], batch_size=self.opt['batch_size'])
-        del slots, masks
-        return loss
+	rebalanced_data = Rebalanced_Dataset(dataframe=df, transform = transforms.ToTensor())
+	return rebalanced_data
 
-    def on_train_epoch_end(self):
-        self.model.eval()
-        coll = Slot_Collector(self.opt["num_slots"], self.opt["codebook_size"])
-        coll.get_slots(self.t_loader, self)
-        print("\nSlots Distribution for Epoch:", self.current_epoch)
-        # print([len(coll.slot_collector[i]) for i in coll.slot_collector])
-        for i in coll.slot_collector:
-            if len(coll.slot_collector[i]) > 0:
-                print(len(coll.slot_collector[i]), end=" ")
 
-    def validation_step(self, batch, batch_idx):
-        images, _, labels = batch
-        recon_combined, recons, masks, slots, vq_loss, perplexity, codes = self.model(images)
-        recon_loss = nn.functional.mse_loss(recon_combined, images)
-        loss = self.alpha*recon_loss + vq_loss
-        self.log("recon_val_loss", recon_loss, batch_size=self.opt['batch_size'])
-        self.log("vq_val_loss", vq_loss, batch_size=self.opt['batch_size'])
-        self.log("total_val_loss", loss, batch_size=self.opt['batch_size'])
-        # self.log("perplexity", perplexity, batch_size=self.opt['batch_size'])
-        self.log("engagement_0", perplexity[0], batch_size=self.opt['batch_size'])
-        self.log("engagement_1", perplexity[1], batch_size=self.opt['batch_size'])
-        self.log("engagement_2", perplexity[2], batch_size=self.opt['batch_size'])
-        del slots, masks
-        return loss
 
-    def test_step(self, batch, batch_idx):
-        images, _, labels = batch
-        recon_combined, recons, masks, slots, vq_loss, perplexity, codes = self.model(images)
-        recon_loss = nn.functional.mse_loss(recon_combined, images)
-        loss = self.alpha*recon_loss + vq_loss
-        self.log("recon_test_loss", recon_loss, batch_size=self.opt['batch_size'])
-        self.log("vq_test_loss", vq_loss, batch_size=self.opt['batch_size'])
-        self.log("total_test_loss", loss, batch_size=self.opt['batch_size'])
-        # self.log("perplexity", perplexity, batch_size=self.opt['batch_size'])
-        self.log("engagement_0", perplexity[0], batch_size=self.opt['batch_size'])
-        self.log("engagement_1", perplexity[1], batch_size=self.opt['batch_size'])
-        self.log("engagement_2", perplexity[2], batch_size=self.opt['batch_size'])
-        del slots, masks
-        return loss
+def eval_using_classifier(data_prepper, rebalanced_data, classifier_args, run_name):
+	# Initialising models
+	seed_everything(seed=classifier_args["seed"], workers=True)
+	model_1 = Lightning_Classifier(classifier_args, data_type="Original").to(device)
+	model_2 = Lightning_Classifier(classifier_args, data_type="Rebalanced").to(device)
+	model_2.model = copy.deepcopy(model_1.model).to(device)
 
-    def predict_step(self, batch, batch_idx):
-        images, _, labels = batch
-        recon_combined, recons, masks, slots, vq_loss, perplexity, codes = self.model(images)
-        return recon_combined, recons, masks, slots, vq_loss, perplexity, codes
 
-    def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.opt["learning_rate"])
+	wandb_logger = WandbLogger(project='Slot_Rebalancing_Experiments',
+				   name=run_name,
+				   log_model='all')
+
+	trainer = Trainer(profiler="simple",
+					deterministic=True,
+					accelerator="gpu",
+					logger=wandb_logger,
+					max_epochs=classifier_args["num_epochs"],
+					# callbacks=[checkpoint_callback],
+					)
+
+
+	trainer.fit(model_1, train_dataloaders=data_prepper.train_loader, val_dataloaders=[data_prepper.val_loader, data_prepper.test_loader])
+
+	trainer = Trainer(profiler="simple",
+					deterministic=True,
+					accelerator="gpu",
+					logger=wandb_logger,
+					max_epochs=classifier_args["num_epochs"],
+					# callbacks=[checkpoint_callback],
+					)
+	balanced_data_loader = DataLoader(rebalanced_data, batch_size=classifier_args["batch_size"], shuffle=True, num_workers=classifier_args["num_workers"])
+	trainer.fit(model_2, train_dataloaders=balanced_data_loader, val_dataloaders=[data_prepper.val_loader, data_prepper.test_loader])
+	wandb.finish()
+
+# driver code
+if __name__ == "__main__":
+
+	# set up args for easy tinkering
+	def get_args():
+		parser = argparse.ArgumentParser()
+		parser.add_argument("--slot-run-name", default="")
+		parser.add_argument("--orig_classifier-run-name", default="")
+		parser.add_argument("--rebal_classifier-run-name", default="")
+		parser.add_argument("--dataset-name", default="mnist", choices=["mnist"])
+		parser.add_argument("--logging", default="off")
+		args = parser.parse_args()
+		return args
+
+	# args = get_args()
+	run_name = f'seed{model_args["seed"]}_alpha{model_args["alpha"]}_beta{model_args["beta"]}_with_kmeans'
+	data_prepper = get_data(data_args)
+	model = train_slot_model(model_args, data_prepper, run_name)
+	rebalanced_data = rebalance(model, data_prepper, model_args)
+	eval_using_classifier(data_prepper, rebalanced_data, classifier_args, run_name)
+
