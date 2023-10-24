@@ -47,7 +47,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         self.device = device
 
         self.encoder_cnn = Encoder(self.resolution, self.hid_dim).to(device)
-        self.decoder_cnn = Decoder(self.hid_dim, self.resolution).to(device)
+        self.decoder = Decoder(self.hid_dim, self.resolution).to(device)
 
         self.fc1 = nn.Linear(hid_dim, hid_dim)
         self.fc2 = nn.Linear(hid_dim, hid_dim)
@@ -123,7 +123,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         slots = slots.repeat((1, 8, 8, 1))
 
         # `slots` has shape: [batch_size*num_slots, width_init, height_init, slot_size].
-        x = self.decoder_cnn(slots)
+        x = self.decoder(slots)
         # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
 
         # Undo combination of slot and batch dimension; split alpha masks.
@@ -141,7 +141,7 @@ class SlotAttentionAutoEncoder(nn.Module):
     
     
 class Lightning_AE(lightning.LightningModule):
-    def __init__(self, opt, train_loader):
+    def __init__(self, opt, train_loader = None):
         super().__init__()
         seed_everything(seed=opt["seed"], workers=True)
         self.example_input_array = torch.Tensor(32, 3, 28, 28)
@@ -162,7 +162,8 @@ class Lightning_AE(lightning.LightningModule):
                                               replace_freq = opt["replace_freq"],
                                               lambda_l2_vq = opt["lambda_l2_vq"],
                                               device = device).to(device)
-        self.t_loader = train_loader
+        if train_loader:
+            self.t_loader = train_loader
         self.save_hyperparameters()
 
     def forward(self, x):
@@ -185,14 +186,15 @@ class Lightning_AE(lightning.LightningModule):
         return loss
 
     def on_train_epoch_end(self):
-        self.model.eval()
-        coll = Slot_Collector(self.opt["num_slots"], self.opt["codebook_size"])
-        coll.get_slots(self.t_loader, self)
-        print("\nSlots Distribution for Epoch:", self.current_epoch)
-        # print([len(coll.slot_collector[i]) for i in coll.slot_collector])
-        for i in coll.slot_collector:
-            if len(coll.slot_collector[i]) > 0:
-                print(len(coll.slot_collector[i]), end=" ")
+        if self.t_loader:
+            self.model.eval()
+            coll = Slot_Collector(self.opt["num_slots"], self.opt["codebook_size"])
+            coll.get_slots(self.t_loader, self)
+            print("\nSlots Distribution for Epoch:", self.current_epoch)
+            # print([len(coll.slot_collector[i]) for i in coll.slot_collector])
+            for i in coll.slot_collector:
+                if len(coll.slot_collector[i]) > 0:
+                    print(len(coll.slot_collector[i]), end=" ")
 
     def validation_step(self, batch, batch_idx):
         images, _, labels = batch
@@ -231,3 +233,20 @@ class Lightning_AE(lightning.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.opt["learning_rate"])
+    
+if __name__ == "__main__":
+
+    from configs import model_args
+    from lightning.pytorch.utilities.model_summary import ModelSummary
+    
+    model = Lightning_AE(model_args, None)
+    if model_args["use_kmeans"]:
+        model.model.warmup_quantizers()
+    summary = ModelSummary(model, max_depth=-1)
+    print("Model Summary:\n", summary)
+    print()
+    
+    # Print configs in a pretty way
+    print("Configs:\n")
+    for i in model_args:
+        print(i, ":", model_args[i])
