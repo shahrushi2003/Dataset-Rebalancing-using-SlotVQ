@@ -244,7 +244,6 @@ if __name__ == "__main__":
         model.model.warmup_quantizers()
     summary = ModelSummary(model, max_depth=-1)
     print("Model Summary:\n", summary)
-    print()
     
     # Print configs in a pretty way
     print("Configs:\n")
